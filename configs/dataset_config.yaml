@@ -1,0 +1,119 @@
+dataset:
+  output_dir: dataset
+  seed: 42
+  splits:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+
+simulation:
+  headless: true
+  renderer: RayTracedLighting
+  samples_per_pixel: 32
+
+capture:
+  width: 960
+  height: 540
+  fps: 15
+  frames_per_clip: 50
+  clips_per_scene: 20
+  rgb: true
+  semantic: true
+  depth: true
+  preview_video: true
+
+camera:
+  height_m: 0.5
+  pitch_deg: 32
+  horizontal_fov_deg: 90
+  forward_speed_mps:
+    min: 0.25
+    max: 0.65
+  turn_rate_degps:
+    min: -8
+    max: 8
+  jitter:
+    position_m: 0.015
+    yaw_deg: 1.5
+    pitch_deg: 1.0
+    roll_deg: 0.8
+
+world:
+  terrain_width_m: 14
+  terrain_length_m: 32
+  grass_tufts: 350
+
+randomization:
+  sun_intensity:
+    min: 800
+    max: 3500
+  sun_elevation_deg:
+    min: 18
+    max: 72
+  sun_azimuth_deg:
+    min: -160
+    max: 160
+  sky_intensity:
+    min: 120
+    max: 850
+
+scenes:
+  normal_grass:
+    weight: 0.4
+    soil_patches:
+      min: 1
+      max: 4
+    leaf_patches:
+      min: 0
+      max: 2
+    obstacles:
+      min: 0
+      max: 2
+    dry_grass_ratio:
+      min: 0.0
+      max: 0.12
+
+  grass_soil_mix:
+    weight: 0.25
+    soil_patches:
+      min: 5
+      max: 11
+    leaf_patches:
+      min: 0
+      max: 3
+    obstacles:
+      min: 0
+      max: 2
+    dry_grass_ratio:
+      min: 0.05
+      max: 0.2
+
+  dry_grass_leaf:
+    weight: 0.15
+    soil_patches:
+      min: 2
+      max: 6
+    leaf_patches:
+      min: 5
+      max: 12
+    obstacles:
+      min: 0
+      max: 2
+    dry_grass_ratio:
+      min: 0.28
+      max: 0.58
+
+  shadow_obstacle_dense:
+    weight: 0.2
+    soil_patches:
+      min: 2
+      max: 7
+    leaf_patches:
+      min: 1
+      max: 5
+    obstacles:
+      min: 5
+      max: 12
+    dry_grass_ratio:
+      min: 0.06
+      max: 0.3

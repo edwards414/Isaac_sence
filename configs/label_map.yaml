@@ -1,0 +1,7 @@
+background: 0
+grass: 1
+soil: 2
+obstacle: 3
+unknown: 4
+curb: 5
+road: 6
