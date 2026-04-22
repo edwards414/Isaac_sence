@@ -1,4 +1,20 @@
+assets:
+  # Set to false to fall back to procedural geometry (no Nucleus needed)
+  use_nvidia_assets: true
+  # Leave nucleus_root empty to auto-detect via get_assets_root_path()
+  nucleus_root: "https://omniverse-content-production.s3-us-west-2.amazonaws.com"
+  # Relative paths under nucleus_root (random one is picked per clip)
+  grass:
+    - "Assets/Vegetation/Shrub/Grass_Short_A.usd"
+  dry_grass:
+    - "Assets/Vegetation/Shrub/Grass_Short_A.usd" # Using the same asset for now, can be updated later
+  rocks: [] # Keeping empty to use fallback spheres/cylinders
+  terrain_ground: "" # Keeping empty to use fallback colored cube for ground
+  # Scale correction: NVIDIA assets are often in cm, set 0.01 to convert to metres
+  asset_scale: 1.0
+
 dataset:
+
   output_dir: dataset
   seed: 42
   splits:
@@ -8,8 +24,8 @@ dataset:
 
 simulation:
   headless: true
-  renderer: RayTracedLighting
-  samples_per_pixel: 32
+  renderer: PathTracing
+  samples_per_pixel: 64
 
 capture:
   width: 960

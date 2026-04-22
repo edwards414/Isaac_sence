@@ -27,12 +27,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config",
-        default="configs/dataset_config.yaml",
+        default=str(Path(__file__).resolve().parents[1] / "configs" / "dataset_config.yaml"),
         help="Dataset config path. YAML is recommended; JSON also works.",
     )
     parser.add_argument(
         "--label-map",
-        default="configs/label_map.yaml",
+        default=str(Path(__file__).resolve().parents[1] / "configs" / "label_map.yaml"),
         help="Class label map path. YAML is recommended; JSON also works.",
     )
     parser.add_argument(
@@ -159,17 +159,20 @@ class IsaacGrassDatasetGenerator:
         import numpy as np  # type: ignore
         import omni.replicator.core as rep  # type: ignore
         import omni.usd  # type: ignore
+        import omni.kit.commands  # type: ignore
         from pxr import Gf, Sdf, Semantics, UsdGeom, UsdLux, UsdShade  # type: ignore
 
         self.np = np
         self.rep = rep
         self.omni_usd = omni.usd
+        self.omni_kit_commands = omni.kit.commands
         self.Gf = Gf
         self.Sdf = Sdf
         self.Semantics = Semantics
         self.UsdGeom = UsdGeom
         self.UsdLux = UsdLux
         self.UsdShade = UsdShade
+        self._nucleus_root: str | None = None
 
         try:
             from PIL import Image  # type: ignore
@@ -179,6 +182,68 @@ class IsaacGrassDatasetGenerator:
                 "Isaac Sim Python environment."
             ) from exc
         self.Image = Image
+
+    # ------------------------------------------------------------------
+    # NVIDIA Assets helpers
+    # ------------------------------------------------------------------
+
+    def _get_nucleus_root(self) -> str:
+        """Return the Nucleus/CDN root URL, caching the result."""
+        if self._nucleus_root is not None:
+            return self._nucleus_root
+        configured = self.cfg.get("assets", {}).get("nucleus_root", "")
+        if configured:
+            self._nucleus_root = configured.rstrip("/")
+            return self._nucleus_root
+        try:
+            from isaacsim.core.utils.nucleus import get_assets_root_path  # type: ignore
+            root = get_assets_root_path()
+        except ImportError:
+            try:
+                from omni.isaac.core.utils.nucleus import get_assets_root_path  # type: ignore
+                root = get_assets_root_path()
+            except ImportError:
+                root = "omniverse://localhost"
+        self._nucleus_root = (root or "omniverse://localhost").rstrip("/")
+        print(f"[Assets] Nucleus root: {self._nucleus_root}")
+        return self._nucleus_root
+
+    def _load_asset(
+        self,
+        stage: Any,
+        prim_path: str,
+        relative_url: str,
+        translate: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        rotate_xyz: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        scale: float = 1.0,
+        label: str = "",
+        instanceable: bool = True,
+    ) -> Any | None:
+        """Load a USD asset via reference and return its prim, or None on failure."""
+        asset_url = f"{self._get_nucleus_root()}/{relative_url}"
+        try:
+            self.omni_kit_commands.execute(
+                "CreateReferenceCommand",
+                usd_context=self.omni_usd.get_context(),
+                path_to=prim_path,
+                asset_path=asset_url,
+                instanceable=instanceable,
+            )
+        except Exception as exc:
+            print(f"[Assets] Failed to load {asset_url}: {exc}")
+            return None
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            print(f"[Assets] Prim not valid after load: {prim_path}")
+            return None
+        xform = self.UsdGeom.Xformable(prim)
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp(self.UsdGeom.XformOp.PrecisionDouble).Set(self.Gf.Vec3d(*translate))
+        xform.AddRotateXYZOp(self.UsdGeom.XformOp.PrecisionDouble).Set(self.Gf.Vec3d(*rotate_xyz))
+        xform.AddScaleOp(self.UsdGeom.XformOp.PrecisionDouble).Set(self.Gf.Vec3d(scale, scale, scale))
+        if label:
+            self._set_semantic_label(prim, label)
+        return prim
 
     def run(self) -> None:
         output_dir = Path(self.cfg["dataset"]["output_dir"]).resolve()
@@ -490,165 +555,149 @@ class IsaacGrassDatasetGenerator:
         rng: random.Random,
     ) -> dict[str, Any]:
         world_cfg = self.cfg.get("world", {})
+        assets_cfg = self.cfg.get("assets", {})
+        use_assets = bool(assets_cfg.get("use_nvidia_assets", False))
+        asset_scale = float(assets_cfg.get("asset_scale", 1.0))
+
         width = float(world_cfg.get("terrain_width_m", 14))
         length = float(world_cfg.get("terrain_length_m", 32))
         dry_ratio = get_range(scene_cfg.get("dry_grass_ratio"), rng, 0.1)
-
-        grass_color = (
-            rng.uniform(0.12, 0.24),
-            rng.uniform(0.36, 0.58),
-            rng.uniform(0.08, 0.18),
-        )
-        dry_color = (
-            rng.uniform(0.45, 0.68),
-            rng.uniform(0.37, 0.52),
-            rng.uniform(0.15, 0.23),
-        )
-        soil_color = (
-            rng.uniform(0.18, 0.34),
-            rng.uniform(0.12, 0.23),
-            rng.uniform(0.07, 0.13),
-        )
-        leaf_color = (
-            rng.uniform(0.37, 0.66),
-            rng.uniform(0.16, 0.35),
-            rng.uniform(0.04, 0.12),
-        )
-
-        mat_grass = self._create_material(stage, "grass", grass_color)
-        mat_dry = self._create_material(stage, "dry_grass", dry_color)
-        mat_soil = self._create_material(stage, "soil", soil_color)
-        mat_leaf = self._create_material(stage, "leaf_unknown", leaf_color)
-        mat_rock = self._create_material(stage, "rock_obstacle", (0.36, 0.35, 0.32))
-        mat_wood = self._create_material(stage, "wood_obstacle", (0.34, 0.22, 0.12))
-        mat_curb = self._create_material(stage, "curb", (0.55, 0.55, 0.5))
-        mat_road = self._create_material(stage, "road", (0.08, 0.09, 0.09))
-
-        self._cube(
-            stage,
-            "/World/Terrain/GrassBase",
-            (0.0, 0.0, -0.03),
-            (width, length, 0.06),
-            mat_grass,
-            "grass",
-        )
-
         soil_count = get_int_range(scene_cfg.get("soil_patches"), rng, 3)
         leaf_count = get_int_range(scene_cfg.get("leaf_patches"), rng, 2)
         obstacle_count = get_int_range(scene_cfg.get("obstacles"), rng, 1)
         grass_tufts = int(world_cfg.get("grass_tufts", 350))
 
+        # Procedural fallback materials
+        mat_grass = self._create_material(stage, "grass",
+            (rng.uniform(0.12, 0.24), rng.uniform(0.36, 0.58), rng.uniform(0.08, 0.18)))
+        mat_dry   = self._create_material(stage, "dry_grass",
+            (rng.uniform(0.45, 0.68), rng.uniform(0.37, 0.52), rng.uniform(0.15, 0.23)))
+        mat_soil  = self._create_material(stage, "soil",
+            (rng.uniform(0.18, 0.34), rng.uniform(0.12, 0.23), rng.uniform(0.07, 0.13)))
+        mat_leaf  = self._create_material(stage, "leaf_unknown",
+            (rng.uniform(0.37, 0.66), rng.uniform(0.16, 0.35), rng.uniform(0.04, 0.12)))
+        mat_rock = self._create_material(stage, "rock_obstacle", (0.36, 0.35, 0.32))
+        mat_wood = self._create_material(stage, "wood_obstacle", (0.34, 0.22, 0.12))
+        mat_curb = self._create_material(stage, "curb",          (0.55, 0.55, 0.5))
+        mat_road = self._create_material(stage, "road",          (0.08, 0.09, 0.09))
+
+        # ── Ground / terrain ─────────────────────────────────────────────
+        terrain_loaded = False
+        if use_assets:
+            ground_url = assets_cfg.get("terrain_ground", "")
+            if ground_url:
+                prim = self._load_asset(
+                    stage, "/World/Terrain/GrassGround", ground_url,
+                    translate=(0.0, 0.0, 0.0), scale=asset_scale, label="grass",
+                )
+                if prim is not None:
+                    terrain_loaded = True
+                    print("[Assets] Terrain ground loaded from Nucleus.")
+        if not terrain_loaded:
+            self._cube(stage, "/World/Terrain/GrassBase",
+                       (0.0, 0.0, -0.03), (width, length, 0.06), mat_grass, "grass")
+
+        # ── Soil patches (always procedural) ─────────────────────────────
         for idx in range(soil_count):
             sx = rng.uniform(0.6, 2.4)
             sy = rng.uniform(0.8, 3.2)
-            x = rng.uniform(-width * 0.42, width * 0.42)
-            y = rng.uniform(-length * 0.42, length * 0.42)
-            self._cube(
-                stage,
-                f"/World/Terrain/SoilPatch_{idx:03d}",
-                (x, y, 0.005),
-                (sx, sy, 0.012),
-                mat_soil,
-                "soil",
-            )
+            x  = rng.uniform(-width  * 0.42, width  * 0.42)
+            y  = rng.uniform(-length * 0.42, length * 0.42)
+            self._cube(stage, f"/World/Terrain/SoilPatch_{idx:03d}",
+                       (x, y, 0.005), (sx, sy, 0.012), mat_soil, "soil")
 
         for idx in range(leaf_count):
             radius = rng.uniform(0.25, 0.9)
             height = rng.uniform(0.006, 0.016)
-            x = rng.uniform(-width * 0.44, width * 0.44)
+            x = rng.uniform(-width  * 0.44, width  * 0.44)
             y = rng.uniform(-length * 0.44, length * 0.44)
-            self._cylinder(
-                stage,
-                f"/World/Terrain/LeafPatch_{idx:03d}",
-                (x, y, height * 0.5 + 0.015),
-                radius,
-                height,
-                mat_leaf,
-                "unknown",
-            )
+            self._cylinder(stage, f"/World/Terrain/LeafPatch_{idx:03d}",
+                           (x, y, height * 0.5 + 0.015), radius, height, mat_leaf, "unknown")
+
+        # ── Grass tufts ───────────────────────────────────────────────────
+        grass_urls = assets_cfg.get("grass", [])
+        dry_urls   = assets_cfg.get("dry_grass", [])
 
         for idx in range(grass_tufts):
-            mat = mat_dry if rng.random() < dry_ratio else mat_grass
-            x = rng.uniform(-width * 0.48, width * 0.48)
+            is_dry = rng.random() < dry_ratio
+            x = rng.uniform(-width  * 0.48, width  * 0.48)
             y = rng.uniform(-length * 0.48, length * 0.48)
-            radius = rng.uniform(0.012, 0.035)
-            height = rng.uniform(0.035, 0.15)
-            self._cone(
-                stage,
-                f"/World/GrassTufts/Tuft_{idx:04d}",
-                (x, y, height * 0.5),
-                radius,
-                height,
-                mat,
-                "grass",
-            )
+            placed = False
+            if use_assets:
+                url_list = dry_urls if (is_dry and dry_urls) else grass_urls
+                if url_list:
+                    prim = self._load_asset(
+                        stage, f"/World/GrassTufts/Tuft_{idx:04d}",
+                        rng.choice(url_list),
+                        translate=(x, y, 0.0),
+                        rotate_xyz=(0.0, 0.0, rng.uniform(0.0, 360.0)),
+                        scale=rng.uniform(0.8, 1.4) * asset_scale,
+                        label="dry_grass" if is_dry else "grass",
+                    )
+                    if prim is not None:
+                        placed = True
+            if not placed:
+                mat    = mat_dry if is_dry else mat_grass
+                radius = rng.uniform(0.012, 0.035)
+                height = rng.uniform(0.035, 0.15)
+                self._cone(stage, f"/World/GrassTufts/Tuft_{idx:04d}",
+                           (x, y, height * 0.5), radius, height, mat, "grass")
+
+        # ── Obstacles ─────────────────────────────────────────────────────
+        rock_urls = assets_cfg.get("rocks", [])
 
         for idx in range(obstacle_count):
-            x = rng.uniform(-width * 0.42, width * 0.42)
+            x = rng.uniform(-width  * 0.42, width  * 0.42)
             y = rng.uniform(-length * 0.34, length * 0.44)
-            if rng.random() < 0.5:
-                scale = (
-                    rng.uniform(0.18, 0.45),
-                    rng.uniform(0.16, 0.38),
-                    rng.uniform(0.08, 0.28),
+            placed = False
+            if use_assets and rock_urls:
+                prim = self._load_asset(
+                    stage, f"/World/Obstacles/Rock_{idx:03d}",
+                    rng.choice(rock_urls),
+                    translate=(x, y, 0.0),
+                    rotate_xyz=(0.0, 0.0, rng.uniform(0.0, 360.0)),
+                    scale=rng.uniform(0.3, 1.0) * asset_scale,
+                    label="obstacle",
                 )
-                self._sphere(
-                    stage,
-                    f"/World/Obstacles/Rock_{idx:03d}",
-                    (x, y, scale[2]),
-                    scale,
-                    mat_rock,
-                    "obstacle",
-                )
-            else:
-                height = rng.uniform(0.35, 1.0)
-                radius = rng.uniform(0.06, 0.18)
-                self._cylinder(
-                    stage,
-                    f"/World/Obstacles/Post_{idx:03d}",
-                    (x, y, height * 0.5),
-                    radius,
-                    height,
-                    mat_wood,
-                    "obstacle",
-                )
+                if prim is not None:
+                    placed = True
+            if not placed:
+                if rng.random() < 0.5:
+                    sc = (rng.uniform(0.18, 0.45), rng.uniform(0.16, 0.38), rng.uniform(0.08, 0.28))
+                    self._sphere(stage, f"/World/Obstacles/Rock_{idx:03d}",
+                                 (x, y, sc[2]), sc, mat_rock, "obstacle")
+                else:
+                    h = rng.uniform(0.35, 1.0)
+                    r = rng.uniform(0.06, 0.18)
+                    self._cylinder(stage, f"/World/Obstacles/Post_{idx:03d}",
+                                   (x, y, h * 0.5), r, h, mat_wood, "obstacle")
 
+        # ── Curb / road / shadow (always procedural) ──────────────────────
         if "obstacle" in scene_name or "shadow" in scene_name:
-            self._cube(
-                stage,
-                "/World/Boundary/CurbLeft",
-                (-width * 0.48, 1.0, 0.055),
-                (0.16, length * 0.8, 0.11),
-                mat_curb,
-                "curb",
-            )
-            self._cube(
-                stage,
-                "/World/Boundary/RoadRight",
-                (width * 0.48, 1.0, 0.01),
-                (0.9, length * 0.8, 0.02),
-                mat_road,
-                "road",
-            )
-            self._cube(
-                stage,
-                "/World/ShadowCaster",
-                (-width * 0.2, -length * 0.1, 2.1),
-                (0.18, length * 0.5, 1.8),
-                mat_wood,
-                "obstacle",
-            )
+            self._cube(stage, "/World/Boundary/CurbLeft",
+                       (-width * 0.48, 1.0, 0.055), (0.16, length * 0.8, 0.11),
+                       mat_curb, "curb")
+            self._cube(stage, "/World/Boundary/RoadRight",
+                       (width * 0.48, 1.0, 0.01), (0.9, length * 0.8, 0.02),
+                       mat_road, "road")
+            self._cube(stage, "/World/ShadowCaster",
+                       (-width * 0.2, -length * 0.1, 2.1), (0.18, length * 0.5, 1.8),
+                       mat_wood, "obstacle")
 
         return {
-            "scene_name": scene_name,
-            "terrain_width_m": width,
-            "terrain_length_m": length,
-            "soil_patches": soil_count,
-            "leaf_patches": leaf_count,
-            "obstacles": obstacle_count,
-            "grass_tufts": grass_tufts,
-            "dry_grass_ratio": dry_ratio,
+            "scene_name":        scene_name,
+            "terrain_width_m":   width,
+            "terrain_length_m":  length,
+            "soil_patches":      soil_count,
+            "leaf_patches":      leaf_count,
+            "obstacles":         obstacle_count,
+            "grass_tufts":       grass_tufts,
+            "dry_grass_ratio":   dry_ratio,
+            "use_nvidia_assets": use_assets,
         }
+
+
+
 
     def _create_camera(self, stage: Any) -> dict[str, Any]:
         camera_cfg = self.cfg["camera"]
@@ -1046,19 +1095,20 @@ def main() -> int:
     }
 
     try:
-        from isaacsim import SimulationApp  # type: ignore
-    except ImportError:
-        try:
-            from omni.isaac.kit import SimulationApp  # type: ignore
-        except ImportError as exc:
-            raise SystemExit(
-                "This script must be run with Isaac Sim's Python environment."
-            ) from exc
+        from omni.isaac.kit import SimulationApp  # type: ignore
+    except ImportError as exc:
+        raise SystemExit(
+            "This script must be run with Isaac Sim's Python environment."
+        ) from exc
 
     simulation_app = SimulationApp(launch_config)
     try:
         generator = IsaacGrassDatasetGenerator(simulation_app, cfg, label_map)
         generator.run()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"ERROR: {e}")
     finally:
         simulation_app.close()
     return 0
