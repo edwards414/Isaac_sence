@@ -606,13 +606,32 @@ class IsaacGrassDatasetGenerator:
             self._cube(stage, f"/World/Terrain/SoilPatch_{idx:03d}",
                        (x, y, 0.005), (sx, sy, 0.012), mat_soil, "soil")
 
+        leaf_urls = assets_cfg.get("leaves", [])
         for idx in range(leaf_count):
-            radius = rng.uniform(0.25, 0.9)
-            height = rng.uniform(0.006, 0.016)
             x = rng.uniform(-width  * 0.44, width  * 0.44)
             y = rng.uniform(-length * 0.44, length * 0.44)
-            self._cylinder(stage, f"/World/Terrain/LeafPatch_{idx:03d}",
-                           (x, y, height * 0.5 + 0.015), radius, height, mat_leaf, "unknown")
+            placed = False
+            if use_assets and leaf_urls:
+                chosen_url = rng.choice(leaf_urls)
+                leaf_scale = rng.uniform(0.8, 1.5) * asset_scale
+                rot_z = rng.uniform(0.0, 360.0)
+                prim = self._load_asset(
+                    stage,
+                    f"/World/Terrain/LeafPatch_{idx:03d}",
+                    chosen_url,
+                    translate=(x, y, 0.0),
+                    rotate_xyz=(0.0, 0.0, rot_z),
+                    scale=leaf_scale,
+                    label="unknown",
+                )
+                if prim is not None:
+                    placed = True
+                    
+            if not placed:
+                radius = rng.uniform(0.25, 0.9)
+                height = rng.uniform(0.006, 0.016)
+                self._cylinder(stage, f"/World/Terrain/LeafPatch_{idx:03d}",
+                               (x, y, height * 0.5 + 0.015), radius, height, mat_leaf, "unknown")
 
         # ── Grass tufts ───────────────────────────────────────────────────
         grass_urls = assets_cfg.get("grass", [])

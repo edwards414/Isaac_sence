@@ -9,6 +9,8 @@ assets:
   dry_grass:
     - "Assets/Vegetation/Shrub/Grass_Short_A.usd" # Using the same asset for now, can be updated later
   rocks: [] # Keeping empty to use fallback spheres/cylinders
+  leaves:
+    - "Assets/Vegetation/Debris/fallcluster1.usd"
   terrain_ground: "" # Keeping empty to use fallback colored cube for ground
   # Scale correction: NVIDIA assets are often in cm, set 0.01 to convert to metres
   asset_scale: 1.0
@@ -77,11 +79,11 @@ scenes:
   normal_grass:
     weight: 0.4
     soil_patches:
-      min: 1
-      max: 4
+      min: 5
+      max: 12
     leaf_patches:
-      min: 0
-      max: 2
+      min: 5
+      max: 15
     obstacles:
       min: 0
       max: 2
@@ -92,11 +94,11 @@ scenes:
   grass_soil_mix:
     weight: 0.25
     soil_patches:
-      min: 5
-      max: 11
+      min: 15
+      max: 30
     leaf_patches:
-      min: 0
-      max: 3
+      min: 8
+      max: 20
     obstacles:
       min: 0
       max: 2
@@ -107,11 +109,11 @@ scenes:
   dry_grass_leaf:
     weight: 0.15
     soil_patches:
-      min: 2
-      max: 6
+      min: 8
+      max: 16
     leaf_patches:
-      min: 5
-      max: 12
+      min: 30
+      max: 70
     obstacles:
       min: 0
       max: 2
@@ -125,8 +127,8 @@ scenes:
       min: 2
       max: 7
     leaf_patches:
-      min: 1
-      max: 5
+      min: 10
+      max: 25
     obstacles:
       min: 5
       max: 12
